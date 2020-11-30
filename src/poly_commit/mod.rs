@@ -15,7 +15,7 @@ use num_bigint::*;
 use rand::{CryptoRng, RngCore};
 
 pub struct CommitmentKeyPC {
-    ck: gens::ProofGens,
+    pp: gens::ProofGens,
     H: super::types::GroupElt,
 }
 
@@ -31,7 +31,7 @@ pub struct PolyCommitmentScheme {
 impl PolyCommitment for PolyCommitmentScheme {
     fn commit(&self, p: Polynomial<Scalar>, deg: u32, r: Scalar) -> ProofResult<GroupElt> {
         assert!(p.degree() == deg as usize);
-        let commit = self.ck.ck.commit(p.into(), r);
+        let commit = self.ck.pp.commit(p.into(), r);
         commit
     }
 
@@ -57,7 +57,7 @@ impl PolyCommitment for PolyCommitmentScheme {
         // compute hiding commitment: \hat{C} = CM.Commit(ck, coeff_p_bar, w_bar)
         let hiding_commitment_C_bar = {
             let coeff_p_bar: Vec<Scalar> = p_bar.clone().into();
-            self.ck.ck.commit(coeff_p_bar, w_bar).unwrap()
+            self.ck.pp.commit(coeff_p_bar, w_bar).unwrap()
         };
 
         // compute challenge alpha, must be in unit group of field
@@ -71,9 +71,9 @@ impl PolyCommitment for PolyCommitmentScheme {
         let p_prime_poly: Polynomial<Scalar> = p.clone() + Polynomial::from(alpha_coeff_p_poly);
         let w_prime = w + alpha * w_bar;
         // compute non hiding commitment to p:  C + α\hat{C} − ω'S
-        let non_hiding_commitment_C_prime: RistrettoPoint = commitment.0 + (alpha * hiding_commitment_C_bar.0) - (w_prime * self.ck.ck.G.0);
+        let non_hiding_commitment_C_prime: RistrettoPoint = commitment.0 + (alpha * hiding_commitment_C_bar.0) - (w_prime * self.ck.pp.G.0);
         let zeroth_challenge = Scalar::random(rng);
-        let H_prime = zeroth_challenge * self.ck.ck.H[0].0;
+        let H_prime = zeroth_challenge * self.ck.pp.H[0].0;
         // get coefficients of original polynomial p
         let coeffs_p_poly: Vec<Scalar> = p.into();
         // compute d+1 powers of z from 0 -> d
@@ -89,7 +89,7 @@ impl PolyCommitment for PolyCommitmentScheme {
 
             temp
         };
-        let G_0 = self.ck.ck.H.clone();
+        let G_0 = self.ck.pp.H.clone();
         let log_2_d1 = log2(deg+1);
         // need to understand following steps from open construction
         Ok(())
