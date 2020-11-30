@@ -20,7 +20,7 @@ pub struct CommitmentKeyPC {
 }
 
 pub trait PolyCommitment {
-    fn commit(&self, coeff_p: Vec<Scalar>, deg: u32, r: Scalar) -> ProofResult<GroupElt>;
+    fn commit(&self, p: Polynomial<Scalar>, deg: u32, r: Scalar) -> ProofResult<GroupElt>;
     fn open<R: RngCore + CryptoRng>(&self, p_poly: Polynomial<Scalar>, commitment: GroupElt, deg: u32, z: Scalar, w: Scalar, rng: &mut R) -> ProofResult<()>;
 }
 
@@ -29,17 +29,17 @@ pub struct PolyCommitmentScheme {
 }
 
 impl PolyCommitment for PolyCommitmentScheme {
-    fn commit(&self, coeff_p: Vec<Scalar>, deg: u32, r: Scalar) -> ProofResult<GroupElt> {
-        assert!(coeff_p.len() == deg as usize);
-        let commit = self.ck.ck.commit(coeff_p, r);
+    fn commit(&self, p: Polynomial<Scalar>, deg: u32, r: Scalar) -> ProofResult<GroupElt> {
+        assert!(p.degree() == deg as usize);
+        let commit = self.ck.ck.commit(p.into(), r);
         commit
     }
 
     #[cfg(feature = "std")]
     fn open<R: RngCore + CryptoRng>(&self, p: Polynomial<Scalar>, commitment: GroupElt, deg: u32, z: Scalar, w: Scalar, rng: &mut R) -> ProofResult<()> {
         let p_eval = p.eval(z);
-        // sample random poly with r_poly(z) = 0
-        let r_poly = {
+        // sample random poly with p_bar(z) = 0
+        let p_bar = {
             let mut partial_poly: Polynomial<Scalar> = Polynomial::new();
             for i in 0..((deg - 1) as usize) {
                 partial_poly.push(Scalar::random(rng));
@@ -53,26 +53,27 @@ impl PolyCommitment for PolyCommitmentScheme {
             partial_poly * z_root_poly
         };
 
-        let new_rand_w = Scalar::random(rng);
-        // compute hiding commitment: \hat{C} = CM.Commit(ck, coeff_r_poly, new_rand_w)
-        let hiding_commitment = {
-            let coeff_r_poly: Vec<Scalar> = r_poly.clone().into();
-            self.ck.ck.commit(coeff_r_poly, new_rand_w).unwrap()
+        let w_bar = Scalar::random(rng);
+        // compute hiding commitment: \hat{C} = CM.Commit(ck, coeff_p_bar, w_bar)
+        let hiding_commitment_C_bar = {
+            let coeff_p_bar: Vec<Scalar> = p_bar.clone().into();
+            self.ck.ck.commit(coeff_p_bar, w_bar).unwrap()
         };
 
-        // compute challenge alpha
+        // compute challenge alpha, must be in unit group of field
         let mut alpha = Scalar::random(rng);
         while alpha == Scalar::zero() {
             alpha = Scalar::random(rng);
         }
 
-        let coeff_r_poly: Vec<Scalar> = r_poly.clone().into();
-        let alpha_coeff_p_poly: Vec<Scalar> = coeff_r_poly.iter().map(|s| alpha * s).collect();
+        let coeff_p_bar: Vec<Scalar> = p_bar.clone().into();
+        let alpha_coeff_p_poly: Vec<Scalar> = coeff_p_bar.iter().map(|s| alpha * s).collect();
         let p_prime_poly: Polynomial<Scalar> = p.clone() + Polynomial::from(alpha_coeff_p_poly);
-        let w_prime = w + alpha * new_rand_w;
+        let w_prime = w + alpha * w_bar;
         // compute non hiding commitment to p:  C + α\hat{C} − ω'S
-        let non_hiding_commitment_to_p_prime: RistrettoPoint = commitment.0 + (alpha * hiding_commitment.0) - (w_prime * self.ck.ck.H[0].0);
+        let non_hiding_commitment_C_prime: RistrettoPoint = commitment.0 + (alpha * hiding_commitment_C_bar.0) - (w_prime * self.ck.ck.G.0);
         let zeroth_challenge = Scalar::random(rng);
+        let H_prime = zeroth_challenge * self.ck.ck.H[0].0;
         // get coefficients of original polynomial p
         let coeffs_p_poly: Vec<Scalar> = p.into();
         // compute d+1 powers of z from 0 -> d
@@ -90,6 +91,7 @@ impl PolyCommitment for PolyCommitmentScheme {
         };
         let G_0 = self.ck.ck.H.clone();
         let log_2_d1 = log2(deg+1);
+        // need to understand following steps from open construction
         Ok(())
     }
 }
