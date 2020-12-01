@@ -101,12 +101,26 @@ impl ProofGens {
     pub fn commit(&self, msg: Vec<Scalar>, r: Scalar) -> ProofResult<GroupElt> {
         assert!(msg.len() <= self.H.len() - 1);
         // compute m_i * g_i for all messages
-        let zipped: Vec<GroupElt> = msg.iter()
+        let temp: Vec<GroupElt> = msg.iter()
             .enumerate()
             .map(|(inx, m_i)| GroupElt(m_i * self.H[inx + 1].0))
             .collect();
         // compute sum(m_i * g_i) for all i from before
-        let summed: GroupElt = zipped.iter().fold(GroupElt(Default::default()), |a, b| GroupElt(a.0 + b.0));
+        let summed: GroupElt = temp.iter().fold(GroupElt(Default::default()), |a, b| GroupElt(a.0 + b.0));
+        // add blinding factor
+        let hiding_sum: GroupElt = GroupElt(r * self.G.0 + summed.0);
+        Ok(hiding_sum)
+    }
+
+    pub fn commit_with_points(&self, msg: Vec<Scalar>, r: Scalar, pts: Vec<GroupElt>) -> ProofResult<GroupElt> {
+        assert!(msg.len() == pts.len());
+        // compute m_i * g_i for all messages
+        let temp: Vec<GroupElt> = msg.iter()
+            .enumerate()
+            .map(|(inx, m_i)| GroupElt(m_i * pts[inx].0))
+            .collect();
+        // compute sum(m_i * g_i) for all i from before
+        let summed: GroupElt = temp.iter().fold(GroupElt(Default::default()), |a, b| GroupElt(a.0 + b.0));
         // add blinding factor
         let hiding_sum: GroupElt = GroupElt(r * self.G.0 + summed.0);
         Ok(hiding_sum)
