@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use curve25519_dalek::ristretto::RistrettoPoint;
-use crate::poly_commit::errors::ProofResult;
+use crate::poly_commit::errors::{ProofResult, ProofError};
 use curve25519_dalek::scalar::Scalar;
 use crate::types::GroupElt;
 use polynomials::Polynomial;
@@ -40,6 +40,8 @@ pub trait PolyCommitment {
     ) -> ProofResult<EvaluationProof>;
     fn challenge_scalar_i(&mut self, i: u8) -> Scalar;
     fn inner_product(&self, left: Vec<Scalar>, right: Vec<Scalar>) -> Scalar;
+    fn check(&mut self, commitment: GroupElt, deg: u32, z: Scalar, v: Scalar, proof: EvaluationProof) -> bool;
+    fn succinct_check(&mut self, commitment: GroupElt, deg: u32, z: Scalar, v: Scalar, proof: EvaluationProof) -> ProofResult<(Polynomial<Scalar>, GroupElt)>;
 }
 
 pub struct PolyCommitmentScheme {
@@ -65,7 +67,7 @@ impl PolyCommitment for PolyCommitmentScheme {
     }
 
     fn commit_with_points(&mut self, p: Polynomial<Scalar>, deg: u32, r: Scalar, pts: Vec<GroupElt>) -> ProofResult<GroupElt> {
-        assert!(p.degree() == deg as usize);
+        assert!(p.degree() <= deg as usize);
         let commit = self.ck.pp.commit_with_points(p.into(), r, pts);
         self.transcript.append_point(b"poly_commit::commit_poly_with_points", &commit.clone().unwrap().0.compress());
         commit
@@ -217,6 +219,74 @@ impl PolyCommitment for PolyCommitmentScheme {
         };
         
         Ok(proof)
+    }
+
+    fn check(&mut self, commitment: GroupElt, deg: u32, z: Scalar, v: Scalar, proof: EvaluationProof) -> bool {
+        // H[0] considered H, H[1:] considered hk
+        let _d_prime = self.ck.pp.H.len() - 1;
+        // // set rk := (<group>, S, H, d')
+        // let rk: (GroupElt, GroupElt, GroupElt, usize) = (self.ck.pp.G, self.ck.pp.G, self.ck.pp.H[0], d_prime);
+        // check PC.SuccinctCheck(rk, C, d, z, v, \pi)
+        let (h, U) = self.succinct_check(commitment, deg, z, v, proof).unwrap();
+        // check that U = CM.Commit(ck,coeffs_h_poly
+        let computed_commitment = self.ck.pp.commit(h.into(), Scalar::zero());
+        return computed_commitment.unwrap().0 == U.0;
+    }
+
+    fn succinct_check(&mut self, commitment: GroupElt, deg: u32, z: Scalar, v: Scalar, proof: EvaluationProof) -> ProofResult<(Polynomial<Scalar>, GroupElt)> {
+        let alpha = self.transcript.challenge_scalar(b"poly_commit::alpha");
+        let non_hiding_commitment_c_prime = GroupElt(commitment.0 + (alpha * proof.C.0) - (proof.w_prime * self.ck.pp.G.0));
+        let zeroth_challenge = self.challenge_scalar_i(0);
+        let H_ = GroupElt(zeroth_challenge * self.ck.pp.H[0].0);
+        let C_0 = GroupElt(non_hiding_commitment_c_prime.0 + (v * H_.0));
+        let mut ith_commitment = C_0;
+        let log2_val = log2(deg + 1);
+        // compute left and right commitments for proof
+        let mut challenges: Vec<Scalar> = vec![];
+        for i in 0..log2_val {
+            // ξi:= ρ0(ξi−1, Li, R)
+            let ith_challenge = self.challenge_scalar_i(i+1);
+            ith_commitment = GroupElt((ith_challenge.invert() * proof.L[i as usize].0) + ith_commitment.0);
+            challenges.push(ith_challenge);
+        }
+        let mut rev_challenges = challenges.clone();
+        rev_challenges.reverse();
+        let h: Vec<Polynomial<Scalar>> = rev_challenges.iter().enumerate().map(|(_inx, c)| {
+            // for each inx, we maintain in our heads that X is really X^{2^inx}
+            // FIXME: this wont' work because the polynomial impl doesn't support sparse polys
+            // TODO: add sparse polynomial implementation
+            Polynomial::from(vec![Scalar::one(), *c])
+        }).collect();
+        // Fails because eval works on a single polynomial
+        // let v_prime = proof.c * h.eval(z);
+        let _stored_val: Vec<Scalar> = vec![];
+        let eval_poly: Vec<Polynomial<Scalar>> = h.iter().enumerate().map(|p| {
+            let poly = p.1;
+            let mut exp = 1;
+            for _ in 0..p.0 {
+                exp = 2 * exp;
+            }
+            let coeffs_poly: Vec<Scalar> = poly.clone().into();
+            let mut val = z;
+            // should optimise this as exp is power of 2
+            for _ in 0..exp {
+                val = val * z;
+            }
+
+            Polynomial::from(vec![Scalar::one(), coeffs_poly[1] * val])
+        }).collect();
+        let reduced_poly = eval_poly.iter().fold(Polynomial::from(vec![Scalar::one()]), |total, next| {
+            next.clone() * total
+        });
+        let v_prime = reduced_poly.eval(z).unwrap();
+        let last_commit = self.commit_with_points(
+            Polynomial::from(vec![proof.c, v_prime]),
+            2,
+            Scalar::zero(),
+            vec![proof.U, H_],
+        ).unwrap();
+        assert!(last_commit == ith_commitment);
+        Err(ProofError::Unimplemented)
     }
 
     fn inner_product(&self, left: Vec<Scalar>, right: Vec<Scalar>) -> Scalar {
